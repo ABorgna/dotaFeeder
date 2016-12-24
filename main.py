@@ -14,9 +14,12 @@ config = configparser.ConfigParser()
 config["general"] = {}
 config["general"]["logfile"] = ""
 config["general"]["loglevel"] = "INFO"
-config["general"]["polling_interval"] = "30"
-config["keys"] = {}
-config["keys"]["discord_api"] = ""
+config["feeder"] = {}
+config["feeder"]["polling_interval"] = "30"
+config["feeder"]["fetch_blogposts"] = "true"
+config["feeder"]["fetch_belvedere"] = "true"
+config["discord"] = {}
+config["discord"]["token"] = ""
 
 if not os.path.isfile(CONFIG_FILE):
     with open(CONFIG_FILE, 'w') as h:
@@ -36,7 +39,7 @@ loglevels = {
 configfile = config["general"]["logfile"]
 configfile = configfile if len(configfile) else None
 level = loglevels.get(config["general"]["loglevel"].upper(), 'INFO')
-fmt = '%(asctime)s:%(levelname)s:%(message)s'
+fmt = '%(asctime)s:%(levelname)s:%(name)s: %(message)s'
 logging.basicConfig(format=fmt, level=level, filename=configfile)
 
 #### Test listener
@@ -50,7 +53,9 @@ def listener(event):
     print("------------")
 
 #### Start feeding
-feeder = DotaFeeder(config.getint("general","polling_interval"))
+feeder = DotaFeeder(config.getint("feeder","polling_interval"),
+                    config.getboolean("feeder","fetch_blogposts"),
+                    config.getboolean("feeder","fetch_belvedere"))
 feeder.addListener(listener)
 
 try:

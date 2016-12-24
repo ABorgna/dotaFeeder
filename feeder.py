@@ -17,9 +17,13 @@ class DotaFeeder:
 
     HTML_STRIP_RE = re.compile(r'(<!--.*?-->|<[^>]*>)')
 
-    def __init__(self, polling_interval=30):
+    def __init__(self, polling_interval=30,
+                 fetchBlogposts=True,
+                 fetchBelvedere=True):
         self.callbacks = []
         self.polling_interval = polling_interval
+        self.fetchBlogposts = fetchBlogposts
+        self.fetchBelvedere = fetchBelvedere
         self._loadPickle()
 
     def addListener(self, callback):
@@ -29,8 +33,10 @@ class DotaFeeder:
     def run(self):
         try:
             while True:
-                self._parseBlog()
-                self._parseBelvedere()
+                if self.fetchBlogposts:
+                    self._parseBlog()
+                if self.fetchBelvedere:
+                    self._parseBelvedere()
                 sleep(self.polling_interval)
         except KeyboardInterrupt:
             self._savePickle()
@@ -98,7 +104,7 @@ class DotaFeeder:
     def _parseBelvedere(self):
         try:
             feed = feedparser.parse(self.BELVEDERE_REDDIT_RSS_URL)
-            logging.info("Belve feed status %s", feed.status)
+            logging.info("Belvedere feed status %s", feed.status)
             if feed.status == 200:
                 content = feed["items"][0]["summary"]
                 content = content[1:100]
