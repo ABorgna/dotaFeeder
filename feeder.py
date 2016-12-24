@@ -1,3 +1,4 @@
+import asyncio
 import feedparser
 import html
 import logging
@@ -17,6 +18,14 @@ class DotaFeeder:
 
     HTML_STRIP_RE = re.compile(r'(<!--.*?-->|<[^>]*>)')
 
+    class Event:
+        def __init__(self, type, title, link=None, description=None, time=None):
+            self.type = type
+            self.title = title
+            self.link = link
+            self.description = description
+            self.time = time
+
     def __init__(self, polling_interval=30,
                  fetchBlogposts=True,
                  fetchBelvedere=True):
@@ -27,35 +36,28 @@ class DotaFeeder:
         self._loadPickle()
 
     def addListener(self, callback):
-        assert(callable(callback))
+        assert(asyncio.iscoroutinefunction(callback))
         self.callbacks.append(callback)
 
-    def run(self):
+    async def run(self):
         try:
             while True:
                 if self.fetchBlogposts:
-                    self._parseBlog()
+                    await self._parseBlog()
                 if self.fetchBelvedere:
-                    self._parseBelvedere()
-                sleep(self.polling_interval)
+                    await self._parseBelvedere()
+                await asyncio.sleep(self.polling_interval)
         except KeyboardInterrupt:
             self._savePickle()
             raise
 
     #### Utils
 
-    def _publish(self, eventType, link, title, content=None):
-        ev = {
-            "type": eventType,
-            "link": link,
-            "title": title,
-            "content": content
-        }
+    async def _publish(self, eventType, title, link=None, description=None,
+                       time=None):
+        event = self.Event(eventType, title, link, description, time)
         for c in self.callbacks:
-            try:
-                c(ev)
-            except:
-                logging.exception("message")
+            await c(event)
 
     def _loadPickle(self):
         if os.path.exists(self.PICKLE_FILE):
@@ -77,12 +79,14 @@ class DotaFeeder:
 
     #### Parsers
 
-    def _parseBlog(self):
+    async def _parseBlog(self):
         try:
             feed = feedparser.parse(self.DOTA2_BLOG_RSS_URL)
             logging.info("Blog feed status %s", feed.status)
             if feed.status != 200:
                 return False
+        except KeyboardInterrupt:
+            raise
         except:
             logging.exception("message")
             return False
@@ -96,20 +100,20 @@ class DotaFeeder:
 
             entry.description = self._stripHTML(entry.description)
             entry.description = html.unescape(entry.description)
-            self._publish("blogpost", entry.link, entry.title, entry.description)
+            await self._publish("blogpost", entry.title, entry.link,
+                                entry.description, entry.updated_parsed)
         self._savePickle()
 
         return True
 
-    def _parseBelvedere(self):
+    async def _parseBelvedere(self):
         try:
             feed = feedparser.parse(self.BELVEDERE_REDDIT_RSS_URL)
             logging.info("Belvedere feed status %s", feed.status)
-            if feed.status == 200:
-                content = feed["items"][0]["summary"]
-                content = content[1:100]
-            else:
+            if feed.status != 200:
                 return False
+        except KeyboardInterrupt:
+            raise
         except:
             logging.exception("message")
             return False
@@ -125,7 +129,8 @@ class DotaFeeder:
 
             description = self._stripHTML(entry.summary)[:100]
             description = html.unescape(description) + "…"
-            self._publish("belvedere", entry.link, entry.title, description)
+            await self._publish("belvedere", entry.title, entry.link,
+                                description, entry.updated_parsed)
         self._savePickle()
 
         return True

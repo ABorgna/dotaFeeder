@@ -1,8 +1,12 @@
 #!/bin/python3
+import asyncio
 import configparser
+import functools
 import logging
 import os.path
+import signal
 from feeder import DotaFeeder
+from discordbot import DiscordBot
 
 CONFIG_FILE = "config.cfg"
 
@@ -42,24 +46,26 @@ level = loglevels.get(config["general"]["loglevel"].upper(), 'INFO')
 fmt = '%(asctime)s:%(levelname)s:%(name)s: %(message)s'
 logging.basicConfig(format=fmt, level=level, filename=configfile)
 
-#### Test listener
-def listener(event):
-    print("------------")
-    print(event["type"])
-    print(event["link"])
-    print(event["title"])
-    print()
-    print(event["content"])
-    print("------------")
-
 #### Start feeding
+stopFns = []
+loop = asyncio.get_event_loop()
+
 feeder = DotaFeeder(config.getint("feeder","polling_interval"),
                     config.getboolean("feeder","fetch_blogposts"),
                     config.getboolean("feeder","fetch_belvedere"))
-feeder.addListener(listener)
+asyncio.ensure_future(feeder.run())
 
-try:
-    feeder.run()
-except KeyboardInterrupt:
-    pass
+discord = DiscordBot(config["discord"]["token"], feeder)
+asyncio.ensure_future(discord.run())
+stopFns.append(discord.stop())
+
+for signame in ('SIGINT', 'SIGTERM'):
+    loop.add_signal_handler(getattr(signal, signame), loop.stop)
+
+loop.run_forever()
+
+print("hi!")
+
+for fn in stopFns:
+    loop.run_until_complete(fn)
 
