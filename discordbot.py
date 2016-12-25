@@ -1,14 +1,26 @@
 import asyncio
 import discord
 import logging
+import os.path
+import pickle
+import shlex
+from collections import defaultdict
+from feeder import DotaFeeder
+from time import sleep
+
 from pprint import pprint
 
 class DiscordBot:
 
-    def __init__(self, token, feeder):
+    PICKLE_FILE = "discordbot_status.pickle"
+
+    def __init__(self, token, updatesPoolingInterval,
+                 updatesFetchBlogpost=True, updatesFetchBelvedere=True):
         self.token = token
 
-        self.feeder = feeder
+        self.feeder = DotaFeeder(updatesPoolingInterval,
+                                 updatesFetchBlogpost,
+                                 updatesFetchBelvedere)
         self.feeder.addListener(self.updateListener)
 
         self.client = discord.Client()
@@ -18,32 +30,50 @@ class DiscordBot:
         self.pendingUpdates = []
         self.lastMsgAuthor = {} # per channel
 
-    async def run(self):
-        while True:
-            try:
-                await self.client.start(self.token)
-            except KeyboardInterrupt:
-                raise
-            except:
-                logging.exception("message")
-                logging.info("DiscordBot crashed, restarting in a minute")
-                await asyncio.sleep(60)
+        self._loadPickle()
 
-    async def stop(self):
-        if self.client.is_logged_in:
-            await self.client.logout()
+    def run(self):
+        running = True
+        while running:
+            try:
+                self.feeder.start()
+                self.client.run(self.token)
+                running = False
+            except:
+                logging.exception("DiscordBot crashed, restarting in a minute")
+                self.feeder.stop()
+                sleep(60)
+        self._savePickle()
 
     async def on_ready(self):
         logging.info('Logged in as %s - %s', self.client.user.name, self.client.user.id)
 
         self.pendingUpdates.sort(key=lambda x: x.time)
-        for e in self.pendingUpdates:
+        for e in self.pendingUpdates[-4:]:
             await self.updateListener(e)
         self.pendingUpdates = []
 
     async def on_message(self, msg):
-        logging.info('Message from %s@%s: %s', msg.author, msg.channel, msg.content)
-        self.lastMsgAuthor[msg.channel] = msg.author
+        logging.debug('Message from %s@%s: %s', msg.author, msg.channel, msg.content)
+
+        self.lastMsgAuthor[msg.channel.id] = msg.author.id
+        if msg.author == self.client.user:
+            return
+
+        userMention = self.client.user.mention
+
+        msg.content = msg.content.strip()
+        if msg.content.startswith(userMention):
+            logging.info('Command from %s@%s: %s', msg.author, msg.channel, msg.content)
+
+            content = msg.content[len(userMention):]
+            cmd = shlex.split(content)
+            await self._parseCommand(cmd, msg)
+
+    async def on_server_join(self, server):
+        msg = "Hello! I'm " + self.client.user.name + "\n" + \
+              "Use '" + self.client.user.mention + " help' to get the available commands"
+        await self.client.send_message(server.default_channel, msg)
 
     async def updateListener(self, event):
         if not self.client.is_logged_in:
@@ -51,18 +81,127 @@ class DiscordBot:
             self.pendingUpdates.append(event)
             return
 
-        msg = "A new update is here!\n" \
-              + event.title + "\n" \
-              + event.link + "\n" \
-              + "\n" \
-              + event.description + "\n"
         for s in self.client.servers:
-            if self.lastMsgAuthor.get(s.default_channel, None) == self.client.user:
-                await self.client.send_message(s.default_channel, "----------------\n"+msg)
-            else:
-                await self.client.send_message(s.default_channel, msg)
-            self.lastMsgAuthor[s.default_channel] = self.client.user
+            postUpdates = self.pickle["serverConfig"][s.id].get("postUpdates", True)
+            if not postUpdates:
+                continue
 
-            # Limit the message rate
-            await asyncio.sleep(0.1)
+            channel = self.pickle["serverConfig"][s.id].get("updatesChannel", s.default_channel)
+            callEveryone = self.pickle["serverConfig"][s.id].get("callEveryone", False)
+
+            prefix = "@everyone " if callEveryone else ""
+            prefix += "A new update is here!\n"
+            await self._postUpdate(event, channel, prefix)
+
+    # Utils
+
+    def _loadPickle(self):
+        if os.path.exists(self.PICKLE_FILE):
+            with open(self.PICKLE_FILE,'rb') as h:
+                self.pickle = pickle.load(h)
+        else:
+            self.pickle = {
+                "serverConfig": defaultdict(dict)
+            }
+
+    def _savePickle(self):
+        with open(self.PICKLE_FILE,'wb') as h:
+            pickle.dump(self.pickle, h)
+
+    async def _postUpdate(self, event, channel, prefix=""):
+        msg = prefix + \
+              event.title + "\n" + \
+              event.link + "\n" + \
+              "\n" + \
+              event.description + "\n"
+
+        if self.lastMsgAuthor.get(channel.id, None) == self.client.user.id:
+            await self.client.send_message(channel, "----------------\n"+msg)
+        else:
+            await self.client.send_message(channel, msg)
+
+        self.lastMsgAuthor[channel.id] = self.client.user.id
+
+    # Commands
+
+    async def _parseCommand(self, cmd, msg):
+        if not len(cmd):
+            pass
+        command = cmd[0].lower()
+        args = cmd[1:]
+
+        # TODO: permissions
+        if command == 'help':
+            await self._cmdHelp(args, msg)
+        elif command == 'setPostUpdates'.lower():
+            await self._cmdSetServerBoolean(args, msg, "postUpdates",
+                    "OK, you'll get the news fresh from the oven",
+                    "Oh, I guess you don't care about updates")
+        elif command == 'setChannel'.lower():
+            await self._cmdSetChannel(args, msg)
+        elif command == 'setCallEveryone'.lower():
+            await self._cmdSetServerBoolean(args, msg, "callEveryone",
+                    "OK, now I will annoy everyone on each update",
+                    "Ok, I won't annoy you")
+
+    async def _cmdHelp(self, args, msg):
+        userMention = self.client.user.mention
+
+        postUpdates = self.pickle["serverConfig"][msg.server.id].get("postUpdates", False)
+        postUpdates = "on" if postUpdates else "off"
+
+        currChannel = self.pickle["serverConfig"][msg.server.id].get("updatesChannel", msg.server.default_channel)
+        currChannel = currChannel.name
+
+        callEveryone = self.pickle["serverConfig"][msg.server.id].get("callEveryone", False)
+        callEveryone = "on" if callEveryone else "off"
+
+        help = \
+           userMention + " help: this\n" + \
+           userMention + " blog: show the last blogpost (WIP)\n" + \
+           userMention + " patch: show the last patch notes (WIP)\n" + \
+           "-- Admin commands --\n" + \
+           userMention + " setPostUpdates <on|off>: post new updates" + \
+                                               " (currently "+postUpdates+")\n" + \
+           userMention + " setChannel <channel>: in which channel should I posts the updates" + \
+                                               " (currently "+currChannel+")\n" + \
+           userMention + " setCallEveryone <on|off>: call everyone when posting a new update" + \
+                                               " (currently "+callEveryone+")"
+
+        await self.client.send_message(msg.channel, help)
+
+    async def _cmdSetServerBoolean(self, args, msg, prop, responseTrue="OK", responseFalse="OK"):
+        if not args:
+            await self.client.send_message(msg.channel, "Please specify an option")
+            return
+
+        if args[0].lower() in ["on", "true"]:
+            option = True
+        elif args[0].lower() in ["off", "false"]:
+            option = False
+        else:
+            await self.client.send_message(msg.channel, "Please set on or off")
+            return
+
+        logging.info("Setting property '%s' = '%s' for server %s", prop, args[0], msg.server.name)
+        self.pickle["serverConfig"][msg.server.id][prop] = option
+        self._savePickle()
+
+        await self.client.send_message(msg.channel, responseTrue if option else responseFalse)
+
+    async def _cmdSetChannel(self, args, msg):
+        if not args:
+            await self.client.send_message(msg.channel, "Please specify a new channel")
+            return
+
+        channel = discord.utils.get(msg.server.channels, name=args[0])
+
+        if channel is None:
+            await self.client.send_message(msg.channel, "Hey! There is no channel named '%s'" % args[0])
+            return
+
+        logging.info("Setting channel '%s' for server %s", args[0], msg.server.name)
+        self.pickle["serverConfig"][msg.server.id]["updatesChannel"] = channel
+        self._savePickle()
+        await self.client.send_message(msg.channel, "OK, I'll post updates on %s" % args[0])
 

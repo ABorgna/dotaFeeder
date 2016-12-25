@@ -39,17 +39,16 @@ class DotaFeeder:
         assert(asyncio.iscoroutinefunction(callback))
         self.callbacks.append(callback)
 
-    async def run(self):
-        try:
-            while True:
-                if self.fetchBlogposts:
-                    await self._parseBlog()
-                if self.fetchBelvedere:
-                    await self._parseBelvedere()
-                await asyncio.sleep(self.polling_interval)
-        except KeyboardInterrupt:
-            self._savePickle()
-            raise
+    def start(self):
+        logging.info("Pooling updates...")
+
+        if self.fetchBlogposts:
+            asyncio.ensure_future(self._runInLoop(self._parseBlog))
+        if self.fetchBelvedere:
+            asyncio.ensure_future(self._runInLoop(self._parseBelvedere))
+
+    def stop(self):
+        self._savePickle()
 
     #### Utils
 
@@ -77,12 +76,21 @@ class DotaFeeder:
         # Note that this is not a sanitizer
         return self.HTML_STRIP_RE.sub('',text)
 
+    async def _runInLoop(self, fn):
+        try:
+            while True:
+                await fn()
+                await asyncio.sleep(self.polling_interval)
+        except KeyboardInterrupt:
+            self._savePickle()
+            raise
+
     #### Parsers
 
     async def _parseBlog(self):
         try:
             feed = feedparser.parse(self.DOTA2_BLOG_RSS_URL)
-            logging.info("Blog feed status %s", feed.status)
+            logging.debug("Blog feed status %s", feed.status)
             if feed.status != 200:
                 return False
         except KeyboardInterrupt:
@@ -109,7 +117,7 @@ class DotaFeeder:
     async def _parseBelvedere(self):
         try:
             feed = feedparser.parse(self.BELVEDERE_REDDIT_RSS_URL)
-            logging.info("Belvedere feed status %s", feed.status)
+            logging.debug("Belvedere feed status %s", feed.status)
             if feed.status != 200:
                 return False
         except KeyboardInterrupt:
