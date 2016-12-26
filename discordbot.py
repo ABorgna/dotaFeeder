@@ -28,7 +28,6 @@ class DiscordBot:
         self.client.event(self.on_message)
 
         self.pendingUpdates = []
-        self.lastMsgAuthor = {} # per channel
 
         self._loadPickle()
 
@@ -55,8 +54,6 @@ class DiscordBot:
 
     async def on_message(self, msg):
         logging.debug('Message from %s@%s: %s', msg.author, msg.channel, msg.content)
-
-        self.lastMsgAuthor[msg.channel.id] = msg.author.id
         if msg.author == self.client.user:
             return
 
@@ -109,18 +106,16 @@ class DiscordBot:
             pickle.dump(self.pickle, h)
 
     async def _postUpdate(self, event, channel, prefix=""):
+        if event is None:
+            return
+
         msg = prefix + \
               event.title + "\n" + \
               event.link + "\n" + \
               "\n" + \
               event.description + "\n"
 
-        if self.lastMsgAuthor.get(channel.id, None) == self.client.user.id:
-            await self.client.send_message(channel, "----------------\n"+msg)
-        else:
-            await self.client.send_message(channel, msg)
-
-        self.lastMsgAuthor[channel.id] = self.client.user.id
+        await self.client.send_message(channel, msg)
 
     # Commands
 
@@ -131,20 +126,48 @@ class DiscordBot:
         args = cmd[1:]
 
         # TODO: permissions
-        if command == 'help':
+        if command == 'help'.lower():
             await self._cmdHelp(args, msg)
+
+        elif command == 'adminHelp'.lower():
+            await self._cmdAdminHelp(args, msg)
+
+        elif command == 'blog'.lower():
+            event = self.feeder.getLastEvent("blogpost")
+            await self._postUpdate(event, msg.channel)
+
+        elif command == 'patch'.lower():
+            event = self.feeder.getLastEvent("belvedere")
+            await self._postUpdate(event, msg.channel)
+
         elif command == 'setPostUpdates'.lower():
             await self._cmdSetServerBoolean(args, msg, "postUpdates",
                     "OK, you'll get the news fresh from the oven",
-                    "Oh, I guess you don't care about updates")
+                    "Ohh, I guess you don't care about updates")
+
         elif command == 'setChannel'.lower():
             await self._cmdSetChannel(args, msg)
+
         elif command == 'setCallEveryone'.lower():
             await self._cmdSetServerBoolean(args, msg, "callEveryone",
                     "OK, now I will annoy everyone on each update",
-                    "Ok, I won't annoy you")
+                    "OK, I won't annoy you")
+
+        elif command == 'setDetailedPatch'.lower():
+            await self._cmdSetServerBoolean(args, msg, "detailedPatch",
+                    "OK, I'll post the full patch notes",
+                    "OK, I'll just link the patch notes")
 
     async def _cmdHelp(self, args, msg):
+        userMention = self.client.user.mention
+        help = "-- Commands --\n" + \
+           userMention + " blog: show the last blogpost\n" + \
+           userMention + " patch: show the last patch notes\n" + \
+           userMention + " help: this\n" + \
+           userMention + " adminHelp: list admin-only commands\n"
+        await self.client.send_message(msg.channel, help)
+
+    async def _cmdAdminHelp(self, args, msg):
         userMention = self.client.user.mention
 
         postUpdates = self.pickle["serverConfig"][msg.server.id].get("postUpdates", False)
@@ -156,17 +179,18 @@ class DiscordBot:
         callEveryone = self.pickle["serverConfig"][msg.server.id].get("callEveryone", False)
         callEveryone = "on" if callEveryone else "off"
 
-        help = \
-           userMention + " help: this\n" + \
-           userMention + " blog: show the last blogpost (WIP)\n" + \
-           userMention + " patch: show the last patch notes (WIP)\n" + \
-           "-- Admin commands --\n" + \
+        detailedPatch = self.pickle["serverConfig"][msg.server.id].get("detailedPatch", False)
+        detailedPatch = "on" if detailedPatch else "off"
+
+        help = "-- Admin commands --\n" + \
            userMention + " setPostUpdates <on|off>: post new updates" + \
                                                " (currently "+postUpdates+")\n" + \
            userMention + " setChannel <channel>: in which channel should I posts the updates" + \
                                                " (currently "+currChannel+")\n" + \
            userMention + " setCallEveryone <on|off>: call everyone when posting a new update" + \
-                                               " (currently "+callEveryone+")"
+                                               " (currently "+callEveryone+")\n" + \
+           userMention + " setDetailedPatch <on|off>: print all the available patch info" + \
+                                               " (currently "+detailedPatch+") (WIP)\n"
 
         await self.client.send_message(msg.channel, help)
 

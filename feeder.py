@@ -4,9 +4,10 @@ import html
 import logging
 import os.path
 import pickle
-import pprint
 import re
 from time import sleep
+
+from pprint import pprint
 
 class DotaFeeder:
     DOTA2_BLOG_RSS_URL = "http://blog.dota2.com/feed/"
@@ -50,11 +51,22 @@ class DotaFeeder:
     def stop(self):
         self._savePickle()
 
+    def getLastEvent(self, type=None):
+        blog = self.pickle["lastBlogpost"]
+        belv = self.pickle["lastBelvedere"]
+
+        if type == "blogpost":
+            return blog
+        elif type == "belvedere":
+            return belv
+        elif type is None:
+            return belv if belv.time >= blog.time else blog
+        else:
+            return None
+
     #### Utils
 
-    async def _publish(self, eventType, title, link=None, description=None,
-                       time=None):
-        event = self.Event(eventType, title, link, description, time)
+    async def _publish(self, event):
         for c in self.callbacks:
             await c(event)
 
@@ -66,6 +78,8 @@ class DotaFeeder:
             self.pickle = {
                     "previousBlogposts": [],
                     "previousBelvedere": [],
+                    "lastBlogpost": None,
+                    "lastBelvedere": None,
             }
 
     def _savePickle(self):
@@ -99,6 +113,7 @@ class DotaFeeder:
             logging.exception("message")
             return False
 
+        firstValid = True
         for entry in feed.entries:
             if entry.id in self.pickle["previousBlogposts"]:
                 continue
@@ -108,8 +123,16 @@ class DotaFeeder:
 
             entry.description = self._stripHTML(entry.description)
             entry.description = html.unescape(entry.description)
-            await self._publish("blogpost", entry.title, entry.link,
-                                entry.description, entry.updated_parsed)
+
+            event = self.Event("blogpost", entry.title, entry.link,
+                               entry.description, entry.updated_parsed)
+
+            if firstValid:
+                self.pickle["lastBlogpost"] = event
+                firstValid = False
+
+            await self._publish(event)
+
         self._savePickle()
 
         return True
@@ -126,6 +149,7 @@ class DotaFeeder:
             logging.exception("message")
             return False
 
+        firstValid = True
         for entry in feed.entries:
             if "/u/SirBelvedere on" in entry.title:
                 continue
@@ -137,8 +161,16 @@ class DotaFeeder:
 
             description = self._stripHTML(entry.summary)[:100]
             description = html.unescape(description) + "…"
-            await self._publish("belvedere", entry.title, entry.link,
+
+            event = self.Event("belvedere", entry.title, entry.link,
                                 description, entry.updated_parsed)
+
+            if firstValid:
+                self.pickle["lastBelvedere"] = event
+                firstValid = False
+
+            await self._publish(event)
+
         self._savePickle()
 
         return True
