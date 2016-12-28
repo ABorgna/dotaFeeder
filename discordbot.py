@@ -58,14 +58,19 @@ class DiscordBot:
         if msg.author == self.client.user:
             return
 
-        userMention = self.client.user.mention
-
         msg.content = msg.content.strip()
-        if msg.content.startswith(userMention):
-            logging.info('Command from %s@%s: %s', msg.author, msg.channel, msg.content)
+        command = None
 
-            content = msg.content[len(userMention):]
-            cmd = shlex.split(content)
+        if msg.channel.type == discord.ChannelType.private:
+            command = msg.content
+        else:
+            userMention = self.client.user.mention
+            if msg.content.startswith(userMention):
+                command = msg.content[len(userMention):]
+
+        if command is not None:
+            logging.info('Command from %s@%s: %s', msg.author, msg.channel, command)
+            cmd = shlex.split(command)
             await self._parseCommand(cmd, msg)
 
     async def on_server_join(self, server):
@@ -142,25 +147,33 @@ class DiscordBot:
             await self._postUpdate(event, msg.channel)
 
         elif command == 'setPostUpdates'.lower():
-            await self._cmdSetServerBoolean(args, msg, "postUpdates",
-                    "OK, you'll get the news fresh from the oven",
-                    "Ohh, I guess you don't care about updates")
+            if msg.channel.type != discord.ChannelType.private:
+                await self._cmdSetServerBoolean(args, msg, "postUpdates",
+                        "OK, you'll get the news fresh from the oven",
+                        "Ohh, I guess you don't care about updates")
 
         elif command == 'setChannel'.lower():
-            await self._cmdSetChannel(args, msg)
+            if msg.channel.type != discord.ChannelType.private:
+                await self._cmdSetChannel(args, msg)
 
         elif command == 'setCallEveryone'.lower():
-            await self._cmdSetServerBoolean(args, msg, "callEveryone",
-                    "OK, now I will annoy everyone on each update",
-                    "OK, I won't annoy you")
+            if msg.channel.type != discord.ChannelType.private:
+                await self._cmdSetServerBoolean(args, msg, "callEveryone",
+                        "OK, now I will annoy everyone on each update",
+                        "OK, I won't annoy you")
 
         elif command == 'setDetailedPatch'.lower():
-            await self._cmdSetServerBoolean(args, msg, "detailedPatch",
-                    "OK, I'll post the full patch notes",
-                    "OK, I'll just link the patch notes")
+            if msg.channel.type != discord.ChannelType.private:
+                await self._cmdSetServerBoolean(args, msg, "detailedPatch",
+                        "OK, I'll post the full patch notes",
+                        "OK, I'll just link the patch notes")
 
     async def _cmdHelp(self, args, msg):
-        userMention = self.client.user.mention
+        if msg.channel.type == discord.ChannelType.private:
+            userMention = ""
+        else:
+            userMention = self.client.user.mention
+
         help = "-- Commands --\n" + \
            userMention + " blog: show the last blogpost\n" + \
            userMention + " patch: show the last patch notes\n" + \
@@ -169,29 +182,32 @@ class DiscordBot:
         await self.client.send_message(msg.channel, help)
 
     async def _cmdAdminHelp(self, args, msg):
-        userMention = self.client.user.mention
+        if msg.channel.type == discord.ChannelType.private:
+            userMention = ""
+            postUpdates = ""
+            currChannel = ""
+            callEveryone = ""
+            detailedPatch = ""
+        else:
+            userMention = self.client.user.mention
 
-        postUpdates = self.pickle["serverConfig"][msg.server.id].get("postUpdates", False)
-        postUpdates = "on" if postUpdates else "off"
+            postUpdates = self.pickle["serverConfig"][msg.server.id].get("postUpdates", False)
+            postUpdates = " (currently %s)" % ("on" if postUpdates else "off")
 
-        currChannel = self.pickle["serverConfig"][msg.server.id].get("updatesChannel", msg.server.default_channel)
-        currChannel = currChannel.name
+            currChannel = self.pickle["serverConfig"][msg.server.id].get("updatesChannel", msg.server.default_channel)
+            currChannel = " (currently %s)" % currChannel.name
 
-        callEveryone = self.pickle["serverConfig"][msg.server.id].get("callEveryone", False)
-        callEveryone = "on" if callEveryone else "off"
+            callEveryone = self.pickle["serverConfig"][msg.server.id].get("callEveryone", False)
+            callEveryone = " (currently %s)" % ("on" if callEveryone else "off")
 
-        detailedPatch = self.pickle["serverConfig"][msg.server.id].get("detailedPatch", False)
-        detailedPatch = "on" if detailedPatch else "off"
+            detailedPatch = self.pickle["serverConfig"][msg.server.id].get("detailedPatch", False)
+            detailedPatch = " (currently %s)" % ("on" if detailedPatch else "off")
 
         help = "-- Admin commands --\n" + \
-           userMention + " setPostUpdates <on|off>: post new updates" + \
-                                               " (currently "+postUpdates+")\n" + \
-           userMention + " setChannel <channel>: in which channel should I posts the updates" + \
-                                               " (currently "+currChannel+")\n" + \
-           userMention + " setCallEveryone <on|off>: call everyone when posting a new update" + \
-                                               " (currently "+callEveryone+")\n" + \
-           userMention + " setDetailedPatch <on|off>: print all the available patch info" + \
-                                               " (currently "+detailedPatch+") (WIP)\n"
+           userMention + " setPostUpdates <on|off>: post new updates" + postUpdates + "\n" + \
+           userMention + " setChannel <channel>: in which channel should I posts the updates" + currChannel + "\n" + \
+           userMention + " setCallEveryone <on|off>: call everyone when posting a new update" + callEveryone + "\n" + \
+           userMention + " setDetailedPatch <on|off>: print all the available patch info" + detailedPatch + " (WIP)\n"
 
         await self.client.send_message(msg.channel, help)
 
