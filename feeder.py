@@ -26,6 +26,7 @@ class DotaFeeder:
             self.link = link
             self.description = description
             self.time = time
+            self.runningTasks = []
 
     def __init__(self, polling_interval=30,
                  fetchBlogposts=True,
@@ -40,16 +41,26 @@ class DotaFeeder:
         assert(asyncio.iscoroutinefunction(callback))
         self.callbacks.append(callback)
 
-    def start(self):
+    def start(self, loop = None):
         logging.info("Pooling updates...")
 
+        if loop is None:
+            loop = asyncio.get_event_loop()
+
+        self.runningTasks = []
         if self.fetchBlogposts:
-            asyncio.ensure_future(self._runInLoop(self._parseBlog))
+            task = loop.create_task(self._runInLoop(self._parseBlog, loop))
+            self.runningTasks.append(task)
         if self.fetchBelvedere:
-            asyncio.ensure_future(self._runInLoop(self._parseBelvedere))
+            task = loop.create_task(self._runInLoop(self._parseBelvedere, loop))
+            self.runningTasks.append(task)
 
     def stop(self):
         self._savePickle()
+
+        for task in self.runningTasks:
+            task.cancel()
+        self.runningTasks = []
 
     def getLastEvent(self, type=None):
         blog = self.pickle["lastBlogpost"]
@@ -90,9 +101,9 @@ class DotaFeeder:
         # Note that this is not a sanitizer
         return self.HTML_STRIP_RE.sub('',text)
 
-    async def _runInLoop(self, fn):
+    async def _runInLoop(self, fn, loop):
         try:
-            while True:
+            while loop.is_running():
                 await fn()
                 await asyncio.sleep(self.polling_interval)
         except KeyboardInterrupt:

@@ -35,7 +35,6 @@ class DiscordBot:
         running = True
         while running:
             try:
-                self.feeder.start()
                 self.client.run(self.token)
                 running = False
             except:
@@ -46,6 +45,8 @@ class DiscordBot:
 
     async def on_ready(self):
         logging.info('Logged in as %s - %s', self.client.user.name, self.client.user.id)
+
+        self.feeder.start(self.client.loop)
 
         self.pendingUpdates.sort(key=lambda x: x.time)
         for e in self.pendingUpdates[-4:]:
